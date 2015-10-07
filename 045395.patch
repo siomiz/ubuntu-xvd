@@ -1,0 +1,784 @@
+diff --git a/src/dummy_driver.c b/src/dummy_driver.c
+index 6062c39d2a4d..e5ff4dae34f3 100644
+--- a/src/dummy_driver.c
++++ b/src/dummy_driver.c
+@@ -65,9 +65,6 @@ static ModeStatus DUMMYValidMode(SCRN_ARG_TYPE arg, DisplayModePtr mode,
+ static Bool	DUMMYSaveScreen(ScreenPtr pScreen, int mode);
+ 
+ /* Internally used functions */
+-static Bool     dummyModeInit(ScrnInfoPtr pScrn, DisplayModePtr mode);
+-static void	dummySave(ScrnInfoPtr pScrn);
+-static void	dummyRestore(ScrnInfoPtr pScrn, Bool restoreText);
+ static Bool	dummyDriverFunc(ScrnInfoPtr pScrn, xorgDriverFuncOp op,
+ 				pointer ptr);
+ 
+@@ -463,10 +460,6 @@ DUMMYEnterVT(VT_FUNC_ARGS_DECL)
+ {
+     SCRN_INFO_PTR(arg);
+     
+-    /* Should we re-save the text mode on each VT enter? */
+-    if(!dummyModeInit(pScrn, pScrn->currentMode))
+-      return FALSE;
+-
+     DUMMYAdjustFrame(ADJUST_FRAME_ARGS(pScrn, pScrn->frameX0, pScrn->frameY0));
+ 
+     return TRUE;
+@@ -476,8 +469,6 @@ DUMMYEnterVT(VT_FUNC_ARGS_DECL)
+ static void
+ DUMMYLeaveVT(VT_FUNC_ARGS_DECL)
+ {
+-    SCRN_INFO_PTR(arg);
+-    dummyRestore(pScrn, TRUE);
+ }
+ 
+ static void
+@@ -536,13 +527,6 @@ DUMMYScreenInit(SCREEN_INIT_ARGS_DECL)
+     if (!(dPtr->FBBase = malloc(pScrn->videoRam * 1024)))
+ 	return FALSE;
+     
+-    /*
+-     * next we save the current state and setup the first mode
+-     */
+-    dummySave(pScrn);
+-    
+-    if (!dummyModeInit(pScrn,pScrn->currentMode))
+-	return FALSE;
+     DUMMYAdjustFrame(ADJUST_FRAME_ARGS(pScrn, pScrn->frameX0, pScrn->frameY0));
+ 
+     /*
+@@ -665,33 +649,12 @@ DUMMYScreenInit(SCREEN_INIT_ARGS_DECL)
+ Bool
+ DUMMYSwitchMode(SWITCH_MODE_ARGS_DECL)
+ {
+-    SCRN_INFO_PTR(arg);
+-    return dummyModeInit(pScrn, mode);
+ }
+ 
+ /* Mandatory */
+ void
+ DUMMYAdjustFrame(ADJUST_FRAME_ARGS_DECL)
+ {
+-    SCRN_INFO_PTR(arg);
+-    int Base; 
+-
+-    Base = (y * pScrn->displayWidth + x) >> 2;
+-
+-    /* Scale Base by the number of bytes per pixel. */
+-    switch (pScrn->depth) {
+-    case  8 :
+-	break;
+-    case 15 :
+-    case 16 :
+-	Base *= 2;
+-	break;
+-    case 24 :
+-	Base *= 3;
+-	break;
+-    default :
+-	break;
+-    }
+ }
+ 
+ /* Mandatory */
+@@ -702,7 +665,6 @@ DUMMYCloseScreen(CLOSE_SCREEN_ARGS_DECL)
+     DUMMYPtr dPtr = DUMMYPTR(pScrn);
+ 
+     if(pScrn->vtSema){
+- 	dummyRestore(pScrn, TRUE);
+ 	free(dPtr->FBBase);
+     }
+ 
+@@ -744,24 +706,6 @@ DUMMYValidMode(SCRN_ARG_TYPE arg, DisplayModePtr mode, Bool verbose, int flags)
+     return(MODE_OK);
+ }
+ 
+-static void
+-dummySave(ScrnInfoPtr pScrn)
+-{
+-}
+-
+-static void 
+-dummyRestore(ScrnInfoPtr pScrn, Bool restoreText)
+-{
+-}
+-    
+-static Bool
+-dummyModeInit(ScrnInfoPtr pScrn, DisplayModePtr mode)
+-{
+-    dummyRestore(pScrn, FALSE);
+-    
+-    return(TRUE);
+-}
+-
+ Atom VFB_PROP  = 0;
+ #define  VFB_PROP_NAME  "VFB_IDENT"
+ 
+diff --git a/configure.ac b/configure.ac
+index 005611d77ca0..e6e00433d69f 100644
+--- a/configure.ac
++++ b/configure.ac
+@@ -56,7 +56,6 @@ AC_SUBST(moduledir)
+ # Store the list of server defined optional extensions in REQUIRED_MODULES
+ XORG_DRIVER_CHECK_EXT(RANDR, randrproto)
+ XORG_DRIVER_CHECK_EXT(RENDER, renderproto)
+-XORG_DRIVER_CHECK_EXT(XV, videoproto)
+ 
+ if test "x$DGA" = xyes; then
+ 	XORG_DRIVER_CHECK_EXT(XFreeXDGA, xf86dgaproto)
+diff --git a/src/dummy.h b/src/dummy.h
+index c3fdd6efd000..c231be4c069e 100644
+--- a/src/dummy.h
++++ b/src/dummy.h
+@@ -31,9 +31,6 @@ extern void DUMMYHideCursor(ScrnInfoPtr pScrn);
+ /* in dummy_dga.c */
+ Bool DUMMYDGAInit(ScreenPtr pScreen);
+ 
+-/* in dummy_video.c */
+-extern void DUMMYInitVideo(ScreenPtr pScreen);
+-
+ /* globals */
+ typedef struct _color
+ {
+@@ -60,14 +57,6 @@ typedef struct dummyRec
+     int cursorFG, cursorBG;
+ 
+     Bool screenSaver;
+-    Bool video;
+-#ifdef XvExtension
+-    XF86VideoAdaptorPtr overlayAdaptor;
+-#endif
+-    int overlay;
+-    int overlay_offset;
+-    int videoKey;
+-    int interlace;
+     dummy_colors colors[256];
+     pointer* FBBase;
+     Bool        (*CreateWindow)() ;     /* wrapped CreateWindow */
+diff --git a/src/dummy_driver.c b/src/dummy_driver.c
+index e5ff4dae34f3..e3b762304d5a 100644
+--- a/src/dummy_driver.c
++++ b/src/dummy_driver.c
+@@ -29,11 +29,6 @@
+ 
+ #include "picturestr.h"
+ 
+-#ifdef XvExtension
+-#include "xf86xv.h"
+-#include <X11/extensions/Xv.h>
+-#endif
+-
+ /*
+  * Driver data structures.
+  */
+@@ -624,8 +619,6 @@ DUMMYScreenInit(SCREEN_INIT_ARGS_DECL)
+ 			     | CMAP_RELOAD_ON_MODE_SWITCH))
+ 	return FALSE;
+ 
+-/*     DUMMYInitVideo(pScreen); */
+-
+     pScreen->SaveScreen = DUMMYSaveScreen;
+ 
+     
+diff --git a/src/dummy.h b/src/dummy.h
+index c231be4c069e..705b9e5ed8b9 100644
+--- a/src/dummy.h
++++ b/src/dummy.h
+@@ -56,7 +56,6 @@ typedef struct dummyRec
+     int cursorX, cursorY;
+     int cursorFG, cursorBG;
+ 
+-    Bool screenSaver;
+     dummy_colors colors[256];
+     pointer* FBBase;
+     Bool        (*CreateWindow)() ;     /* wrapped CreateWindow */
+diff --git a/src/dummy_driver.c b/src/dummy_driver.c
+index e3b762304d5a..4d833f90cc63 100644
+--- a/src/dummy_driver.c
++++ b/src/dummy_driver.c
+@@ -680,15 +680,6 @@ DUMMYFreeScreen(FREE_SCREEN_ARGS_DECL)
+ static Bool
+ DUMMYSaveScreen(ScreenPtr pScreen, int mode)
+ {
+-    ScrnInfoPtr pScrn = NULL;
+-    DUMMYPtr dPtr;
+-
+-    if (pScreen != NULL) {
+-	pScrn = xf86ScreenToScrn(pScreen);
+-	dPtr = DUMMYPTR(pScrn);
+-
+-	dPtr->screenSaver = xf86IsUnblank(mode);
+-    } 
+     return TRUE;
+ }
+ 
+diff --git a/configure.ac b/configure.ac
+index e6e00433d69f..cc25cfdff335 100644
+--- a/configure.ac
++++ b/configure.ac
+@@ -46,7 +46,6 @@ AC_PROG_LIBTOOL
+ AH_TOP([#include "xorg-server.h"])
+ 
+ # Define a configure option for an alternate module directory
+-AC_ARG_ENABLE(dga,           AS_HELP_STRING([--disable-dga], [Build DGA extension (default: yes)]), [DGA=$enableval], [DGA=yes])
+ AC_ARG_WITH(xorg-module-dir, [  --with-xorg-module-dir=DIR ],
+                              [ moduledir="$withval" ],
+                              [ moduledir="$libdir/xorg/modules" ])
+@@ -57,13 +56,6 @@ AC_SUBST(moduledir)
+ XORG_DRIVER_CHECK_EXT(RANDR, randrproto)
+ XORG_DRIVER_CHECK_EXT(RENDER, renderproto)
+ 
+-if test "x$DGA" = xyes; then
+-	XORG_DRIVER_CHECK_EXT(XFreeXDGA, xf86dgaproto)
+-	AC_DEFINE(USE_DGA, 1, [Support DGA extension])
+-fi
+-AC_SUBST([DGA])
+-AM_CONDITIONAL([DGA], [test "x$DGA" = xyes])
+-
+ # Obtain compiler/linker options for the driver dependencies
+ PKG_CHECK_MODULES(XORG, [xorg-server >= 1.0.99.901] xproto fontsproto $REQUIRED_MODULES)
+ 
+diff --git a/src/Makefile.am b/src/Makefile.am
+index da1dd9a9abe6..c0d82e0a585a 100644
+--- a/src/Makefile.am
++++ b/src/Makefile.am
+@@ -37,8 +37,3 @@ dummy_drv_la_SOURCES = \
+          dummy_cursor.c \
+          dummy_driver.c \
+          dummy.h
+-
+-if DGA
+-dummy_drv_la_SOURCES +=	\
+-         dummy_dga.c
+-endif
+diff --git a/src/dummy.h b/src/dummy.h
+index 705b9e5ed8b9..f902fa607fce 100644
+--- a/src/dummy.h
++++ b/src/dummy.h
+@@ -28,9 +28,6 @@ extern Bool DUMMYCursorInit(ScreenPtr pScrn);
+ extern void DUMMYShowCursor(ScrnInfoPtr pScrn);
+ extern void DUMMYHideCursor(ScrnInfoPtr pScrn);
+ 
+-/* in dummy_dga.c */
+-Bool DUMMYDGAInit(ScreenPtr pScreen);
+-
+ /* globals */
+ typedef struct _color
+ {
+@@ -41,10 +38,6 @@ typedef struct _color
+ 
+ typedef struct dummyRec 
+ {
+-    DGAModePtr		DGAModes;
+-    int			numDGAModes;
+-    Bool		DGAactive;
+-    int			DGAViewportStatus;
+     /* options */
+     OptionInfoPtr Options;
+     Bool swCursor;
+diff --git a/src/dummy_dga.c b/src/dummy_dga.c
+deleted file mode 100644
+index d16d09f1bfc8..000000000000
+--- a/src/dummy_dga.c
++++ /dev/null
+@@ -1,175 +0,0 @@
+-#ifdef HAVE_CONFIG_H
+-#include "config.h"
+-#endif
+-
+-#include "xf86.h"
+-#include "xf86_OSproc.h"
+-#include "dgaproc.h"
+-#include "dummy.h"
+-
+-static Bool DUMMY_OpenFramebuffer(ScrnInfoPtr, char **, unsigned char **, 
+-					int *, int *, int *);
+-static Bool DUMMY_SetMode(ScrnInfoPtr, DGAModePtr);
+-static int  DUMMY_GetViewport(ScrnInfoPtr);
+-static void DUMMY_SetViewport(ScrnInfoPtr, int, int, int);
+-
+-static
+-DGAFunctionRec DUMMYDGAFuncs = {
+-   DUMMY_OpenFramebuffer,
+-   NULL,
+-   DUMMY_SetMode,
+-   DUMMY_SetViewport,
+-   DUMMY_GetViewport,
+-   NULL,
+-   NULL,
+-   NULL,
+-#if 0
+-   DUMMY_BlitTransRect
+-#else
+-   NULL
+-#endif
+-};
+-
+-Bool
+-DUMMYDGAInit(ScreenPtr pScreen)
+-{   
+-   ScrnInfoPtr pScrn = xf86ScreenToScrn(pScreen);
+-   DUMMYPtr pDUMMY = DUMMYPTR(pScrn);
+-   DGAModePtr modes = NULL, newmodes = NULL, currentMode;
+-   DisplayModePtr pMode, firstMode;
+-   int Bpp = pScrn->bitsPerPixel >> 3;
+-   int num = 0, imlines, pixlines;
+-
+-   imlines =  (pScrn->videoRam * 1024) /
+-      (pScrn->displayWidth * (pScrn->bitsPerPixel >> 3));
+-
+-   pixlines =   imlines;
+-
+-   pMode = firstMode = pScrn->modes;
+-
+-   while(pMode) {
+-
+-	newmodes = realloc(modes, (num + 1) * sizeof(DGAModeRec));
+-
+-	if(!newmodes) {
+-	   free(modes);
+-	   return FALSE;
+-	}
+-	modes = newmodes;
+-
+-	currentMode = modes + num;
+-	num++;
+-
+-	currentMode->mode = pMode;
+-	currentMode->flags = DGA_CONCURRENT_ACCESS | DGA_PIXMAP_AVAILABLE;
+-	if(pMode->Flags & V_DBLSCAN)
+-	   currentMode->flags |= DGA_DOUBLESCAN;
+-	if(pMode->Flags & V_INTERLACE)
+-	   currentMode->flags |= DGA_INTERLACED;
+-	currentMode->byteOrder = pScrn->imageByteOrder;
+-	currentMode->depth = pScrn->depth;
+-	currentMode->bitsPerPixel = pScrn->bitsPerPixel;
+-	currentMode->red_mask = pScrn->mask.red;
+-	currentMode->green_mask = pScrn->mask.green;
+-	currentMode->blue_mask = pScrn->mask.blue;
+-	currentMode->visualClass = (Bpp == 1) ? PseudoColor : TrueColor;
+-	currentMode->viewportWidth = pMode->HDisplay;
+-	currentMode->viewportHeight = pMode->VDisplay;
+-	currentMode->xViewportStep = 1;
+-	currentMode->yViewportStep = 1;
+-	currentMode->viewportFlags = DGA_FLIP_RETRACE;
+-	currentMode->offset = 0;
+-	currentMode->address = (unsigned char *)pDUMMY->FBBase;
+-
+-	currentMode->bytesPerScanline = 
+-			((pScrn->displayWidth * Bpp) + 3) & ~3L;
+-	currentMode->imageWidth = pScrn->displayWidth;
+-	currentMode->imageHeight =  imlines;
+-	currentMode->pixmapWidth = currentMode->imageWidth;
+-	currentMode->pixmapHeight = pixlines;
+-	currentMode->maxViewportX = currentMode->imageWidth - 
+-					currentMode->viewportWidth;
+-	currentMode->maxViewportY = currentMode->imageHeight -
+-					currentMode->viewportHeight;
+-
+-	pMode = pMode->next;
+-	if(pMode == firstMode)
+-	   break;
+-   }
+-
+-   pDUMMY->numDGAModes = num;
+-   pDUMMY->DGAModes = modes;
+-
+-   return DGAInit(pScreen, &DUMMYDGAFuncs, modes, num);  
+-}
+-
+-static DisplayModePtr DUMMYSavedDGAModes[MAXSCREENS];
+-
+-static Bool
+-DUMMY_SetMode(
+-   ScrnInfoPtr pScrn,
+-   DGAModePtr pMode
+-){
+-   int index = pScrn->pScreen->myNum;
+-   DUMMYPtr pDUMMY = DUMMYPTR(pScrn);
+-
+-   if(!pMode) { /* restore the original mode */
+- 	if(pDUMMY->DGAactive) {	
+-	    pScrn->currentMode = DUMMYSavedDGAModes[index];
+-            DUMMYSwitchMode(SWITCH_MODE_ARGS(pScrn, pScrn->currentMode));
+-	    DUMMYAdjustFrame(ADJUST_FRAME_ARGS(pScrn, 0, 0));
+- 	    pDUMMY->DGAactive = FALSE;
+-	}
+-   } else {
+-	if(!pDUMMY->DGAactive) {  /* save the old parameters */
+-	    DUMMYSavedDGAModes[index] = pScrn->currentMode;
+-	    pDUMMY->DGAactive = TRUE;
+-	}
+-
+-        DUMMYSwitchMode(SWITCH_MODE_ARGS(pScrn, pMode->mode));
+-   }
+-   
+-   return TRUE;
+-}
+-
+-static int  
+-DUMMY_GetViewport(
+-  ScrnInfoPtr pScrn
+-){
+-    DUMMYPtr pDUMMY = DUMMYPTR(pScrn);
+-
+-    return pDUMMY->DGAViewportStatus;
+-}
+-
+-static void 
+-DUMMY_SetViewport(
+-   ScrnInfoPtr pScrn, 
+-   int x, int y, 
+-   int flags
+-){
+-   DUMMYPtr pDUMMY = DUMMYPTR(pScrn);
+-
+-   DUMMYAdjustFrame(ADJUST_FRAME_ARGS(pScrn, x, y));
+-   pDUMMY->DGAViewportStatus = 0;  
+-}
+-
+-
+-static Bool 
+-DUMMY_OpenFramebuffer(
+-   ScrnInfoPtr pScrn, 
+-   char **name,
+-   unsigned char **mem,
+-   int *size,
+-   int *offset,
+-   int *flags
+-){
+-    DUMMYPtr pDUMMY = DUMMYPTR(pScrn);
+-
+-    *name = NULL; 		/* no special device */
+-    *mem = (unsigned char*)pDUMMY->FBBase;
+-    *size = pScrn->videoRam * 1024;
+-    *offset = 0;
+-    *flags = DGA_NEED_ROOT;
+-
+-    return TRUE;
+-}
+diff --git a/src/dummy_driver.c b/src/dummy_driver.c
+index 4d833f90cc63..194b39fca817 100644
+--- a/src/dummy_driver.c
++++ b/src/dummy_driver.c
+@@ -39,10 +39,6 @@
+ #include <X11/Xproto.h>
+ #include "scrnintstr.h"
+ #include "servermd.h"
+-#ifdef USE_DGA
+-#define _XF86DGA_SERVER_
+-#include <X11/extensions/xf86dgaproto.h>
+-#endif
+ 
+ /* Mandatory functions */
+ static const OptionInfoRec *	DUMMYAvailableOptions(int chipid, int busid);
+@@ -569,10 +565,6 @@ DUMMYScreenInit(SCREEN_INIT_ARGS_DECL)
+ 
+     xf86SetBlackWhitePixels(pScreen);
+ 
+-#ifdef USE_DGA
+-    DUMMYDGAInit(pScreen);
+-#endif
+-    
+     if (dPtr->swCursor)
+ 	xf86DrvMsg(pScrn->scrnIndex, X_CONFIG, "Using Software Cursor.\n");
+ 
+diff --git a/src/dummy.h b/src/dummy.h
+index f902fa607fce..82fbdeaaaa54 100644
+--- a/src/dummy.h
++++ b/src/dummy.h
+@@ -50,7 +50,6 @@ typedef struct dummyRec
+     int cursorFG, cursorBG;
+ 
+     dummy_colors colors[256];
+-    pointer* FBBase;
+     Bool        (*CreateWindow)() ;     /* wrapped CreateWindow */
+     Bool prop;
+ } DUMMYRec, *DUMMYPtr;
+diff --git a/src/dummy_cursor.c b/src/dummy_cursor.c
+index 07a89bf20cb4..d7c67c6962ff 100644
+--- a/src/dummy_cursor.c
++++ b/src/dummy_cursor.c
+@@ -39,8 +39,6 @@ dummySetCursorPosition(ScrnInfoPtr pScrn, int x, int y)
+ {
+     DUMMYPtr dPtr = DUMMYPTR(pScrn);
+ 
+-/*     unsigned char *_dest = ((unsigned char *)dPtr->FBBase + */
+-/* 			    pScrn->videoRam * 1024 - 1024); */
+     dPtr->cursorX = x;
+     dPtr->cursorY = y;
+ }
+diff --git a/src/dummy_driver.c b/src/dummy_driver.c
+index 194b39fca817..8262f39f2563 100644
+--- a/src/dummy_driver.c
++++ b/src/dummy_driver.c
+@@ -505,7 +505,8 @@ DUMMYScreenInit(SCREEN_INIT_ARGS_DECL)
+     DUMMYPtr dPtr;
+     int ret;
+     VisualPtr visual;
+-    
++    void *pixels;
++
+     /*
+      * we need to get the ScrnInfoRec for this screen, so let's allocate
+      * one first thing
+@@ -515,7 +516,7 @@ DUMMYScreenInit(SCREEN_INIT_ARGS_DECL)
+     DUMMYScrn = pScrn;
+ 
+ 
+-    if (!(dPtr->FBBase = malloc(pScrn->videoRam * 1024)))
++    if (!(pixels = malloc(pScrn->videoRam * 1024)))
+ 	return FALSE;
+     
+     DUMMYAdjustFrame(ADJUST_FRAME_ARGS(pScrn, pScrn->frameX0, pScrn->frameY0));
+@@ -538,7 +539,7 @@ DUMMYScreenInit(SCREEN_INIT_ARGS_DECL)
+      * Call the framebuffer layer's ScreenInit function, and fill in other
+      * pScreen fields.
+      */
+-    ret = fbScreenInit(pScreen, dPtr->FBBase,
++    ret = fbScreenInit(pScreen, pixels,
+ 			    pScrn->virtualX, pScrn->virtualY,
+ 			    pScrn->xDpi, pScrn->yDpi,
+ 			    pScrn->displayWidth, pScrn->bitsPerPixel);
+@@ -649,9 +650,7 @@ DUMMYCloseScreen(CLOSE_SCREEN_ARGS_DECL)
+     ScrnInfoPtr pScrn = xf86ScreenToScrn(pScreen);
+     DUMMYPtr dPtr = DUMMYPTR(pScrn);
+ 
+-    if(pScrn->vtSema){
+-	free(dPtr->FBBase);
+-    }
++    free(pScreen->GetScreenPixmap(pScreen)->devPrivate.ptr);
+ 
+     if (dPtr->CursorInfo)
+ 	xf86DestroyCursorInfoRec(dPtr->CursorInfo);
+diff --git a/src/dummy_driver.c b/src/dummy_driver.c
+index 8262f39f2563..48956ef72b50 100644
+--- a/src/dummy_driver.c
++++ b/src/dummy_driver.c
+@@ -22,8 +22,7 @@
+ #include "property.h"
+ 
+ #include "xf86cmap.h"
+-
+-#include "xf86fbman.h"
++#include "xf86Crtc.h"
+ 
+ #include "fb.h"
+ 
+@@ -71,9 +70,6 @@ static Bool	dummyDriverFunc(ScrnInfoPtr pScrn, xorgDriverFuncOp op,
+ #define DUMMY_MINOR_VERSION PACKAGE_VERSION_MINOR
+ #define DUMMY_PATCHLEVEL PACKAGE_VERSION_PATCHLEVEL
+ 
+-#define DUMMY_MAX_WIDTH 32767
+-#define DUMMY_MAX_HEIGHT 32767
+-
+ /*
+  * This is intentionally screen-independent.  It indicates the binding
+  * choice made in the first PreInit.
+@@ -165,6 +161,55 @@ dummySetup(pointer module, pointer opts, int *errmaj, int *errmin)
+ 
+ #endif /* XFree86LOADER */
+ 
++/*
++ * Build a DisplayModeRec that matches the screen's dimensions.
++ *
++ * Make up a fake pixel clock so that applications that use the VidMode
++ * extension to query the "refresh rate" get 60 Hz.
++ */
++static void ConstructFakeDisplayMode(ScrnInfoPtr pScrn, DisplayModePtr mode)
++{
++    mode->HDisplay = mode->HSyncStart = mode->HSyncEnd = mode->HTotal =
++        pScrn->virtualX;
++    mode->VDisplay = mode->VSyncStart = mode->VSyncEnd = mode->VTotal =
++        pScrn->virtualY;
++    mode->Clock = mode->HTotal * mode->VTotal * 60 / 1000;
++
++    xf86SetCrtcForModes(pScrn, 0);
++}
++
++static Bool
++dummy_xf86crtc_resize(ScrnInfoPtr pScrn, int width, int height)
++{
++    ScreenPtr pScreen = pScrn->pScreen;
++    PixmapPtr rootPixmap = pScreen->GetScreenPixmap(pScreen);
++    int newPitch = width * (pScrn->bitsPerPixel / 8);
++    void *oldScreen = rootPixmap->devPrivate.ptr;
++    void *newScreen = calloc(newPitch, height);
++
++    if (!newScreen)
++        return FALSE;
++
++    if (!pScreen->ModifyPixmapHeader(rootPixmap, width, height,
++                                     -1, -1, newPitch, newScreen)) {
++        free(newScreen);
++        return FALSE;
++    }
++
++    free(oldScreen);
++
++    pScrn->virtualX = width;
++    pScrn->virtualY = height;
++    pScrn->displayWidth = width;
++    ConstructFakeDisplayMode(pScrn, pScrn->modes);
++
++    return TRUE;
++}
++
++static const xf86CrtcConfigFuncsRec dummy_xf86crtc_config_funcs = {
++    dummy_xf86crtc_resize
++};
++
+ static Bool
+ DUMMYGetRec(ScrnInfoPtr pScrn)
+ {
+@@ -266,10 +311,7 @@ DUMMYProbe(DriverPtr drv, int flags)
+ Bool
+ DUMMYPreInit(ScrnInfoPtr pScrn, int flags)
+ {
+-    ClockRangePtr clockRanges;
+-    int i;
+     DUMMYPtr dPtr;
+-    int maxClock = 230000;
+     GDevPtr device = xf86GetEntityInfo(pScrn->entityList[0])->device;
+ 
+     if (flags & PROBE_DETECT) 
+@@ -351,80 +393,26 @@ DUMMYPreInit(ScrnInfoPtr pScrn, int flags)
+ 
+     xf86GetOptValBool(dPtr->Options, OPTION_SW_CURSOR,&dPtr->swCursor);
+ 
+-    if (device->videoRam != 0) {
+-	pScrn->videoRam = device->videoRam;
+-	xf86DrvMsg(pScrn->scrnIndex, X_CONFIG, "VideoRAM: %d kByte\n",
+-		   pScrn->videoRam);
+-    } else {
+-	pScrn->videoRam = 4096;
+-	xf86DrvMsg(pScrn->scrnIndex, X_PROBED, "VideoRAM: %d kByte\n",
+-		   pScrn->videoRam);
+-    }
+-    
+-    if (device->dacSpeeds[0] != 0) {
+-	maxClock = device->dacSpeeds[0];
+-	xf86DrvMsg(pScrn->scrnIndex, X_CONFIG, "Max Clock: %d kHz\n",
+-		   maxClock);
+-    } else {
+-	xf86DrvMsg(pScrn->scrnIndex, X_PROBED, "Max Clock: %d kHz\n",
+-		   maxClock);
+-    }
+-
+-    pScrn->progClock = TRUE;
+-    /*
+-     * Setup the ClockRanges, which describe what clock ranges are available,
+-     * and what sort of modes they can be used for.
+-     */
+-    clockRanges = (ClockRangePtr)xnfcalloc(sizeof(ClockRange), 1);
+-    clockRanges->next = NULL;
+-    clockRanges->ClockMulFactor = 1;
+-    clockRanges->minClock = 11000;   /* guessed §§§ */
+-    clockRanges->maxClock = 300000;
+-    clockRanges->clockIndex = -1;		/* programmable */
+-    clockRanges->interlaceAllowed = TRUE; 
+-    clockRanges->doubleScanAllowed = TRUE;
+-
+-    /* Subtract memory for HW cursor */
+-
+-
+-    {
+-	int apertureSize = (pScrn->videoRam * 1024);
+-	i = xf86ValidateModes(pScrn, pScrn->monitor->Modes,
+-			      pScrn->display->modes, clockRanges,
+-			      NULL, 256, DUMMY_MAX_WIDTH,
+-			      (8 * pScrn->bitsPerPixel),
+-			      128, DUMMY_MAX_HEIGHT, pScrn->display->virtualX,
+-			      pScrn->display->virtualY, apertureSize,
+-			      LOOKUP_BEST_REFRESH);
+-
+-       if (i == -1)
+-           RETURN;
+-    }
+-
+-    /* Prune the modes marked as invalid */
+-    xf86PruneDriverModes(pScrn);
++    xf86CrtcConfigInit(pScrn, &dummy_xf86crtc_config_funcs);
++    xf86CrtcSetSizeRange(pScrn, 8, 8, SHRT_MAX, SHRT_MAX);
+ 
+-    if (i == 0 || pScrn->modes == NULL) {
+-	xf86DrvMsg(pScrn->scrnIndex, X_ERROR, "No valid modes found\n");
+-	RETURN;
++    /* Pick up size from the "Display" subsection if it exists */
++    if (pScrn->display->virtualX) {
++        pScrn->virtualX = pScrn->display->virtualX;
++        pScrn->virtualY = pScrn->display->virtualY;
++    } else {
++        /* Pick a "modern" screen resolution */
++        pScrn->virtualX = 3840;
++        pScrn->virtualY = 2160;
+     }
++    pScrn->displayWidth = pScrn->virtualX;
+ 
+-    /*
+-     * Set the CRTC parameters for all of the modes based on the type
+-     * of mode, and the chipset's interlace requirements.
+-     *
+-     * Calling this is required if the mode->Crtc* values are used by the
+-     * driver and if the driver doesn't provide code to set them.  They
+-     * are not pre-initialised at all.
+-     */
+-    xf86SetCrtcForModes(pScrn, 0); 
+- 
+-    /* Set the current mode to the first in the list */
++    /* Construct a mode with the screen's initial dimensions */
++    pScrn->modes = calloc(sizeof(DisplayModeRec), 1);
++    ConstructFakeDisplayMode(pScrn, pScrn->modes);
++    pScrn->modes->next = pScrn->modes->prev = pScrn->modes;
+     pScrn->currentMode = pScrn->modes;
+ 
+-    /* Print the list of modes being used */
+-    xf86PrintModes(pScrn);
+-
+     /* If monitor resolution is set on the command line, use it */
+     xf86SetDpi(pScrn, 0, 0);
+ 
+@@ -515,8 +503,8 @@ DUMMYScreenInit(SCREEN_INIT_ARGS_DECL)
+     dPtr = DUMMYPTR(pScrn);
+     DUMMYScrn = pScrn;
+ 
+-
+-    if (!(pixels = malloc(pScrn->videoRam * 1024)))
++    if (!(pixels = malloc(pScrn->displayWidth * pScrn->bitsPerPixel * 8 *
++                          pScrn->virtualY)))
+ 	return FALSE;
+     
+     DUMMYAdjustFrame(ADJUST_FRAME_ARGS(pScrn, pScrn->frameX0, pScrn->frameY0));
+@@ -569,23 +557,6 @@ DUMMYScreenInit(SCREEN_INIT_ARGS_DECL)
+     if (dPtr->swCursor)
+ 	xf86DrvMsg(pScrn->scrnIndex, X_CONFIG, "Using Software Cursor.\n");
+ 
+-    {
+-
+-	 
+-	BoxRec AvailFBArea;
+-	int lines = pScrn->videoRam * 1024 /
+-	    (pScrn->displayWidth * (pScrn->bitsPerPixel >> 3));
+-	AvailFBArea.x1 = 0;
+-	AvailFBArea.y1 = 0;
+-	AvailFBArea.x2 = pScrn->displayWidth;
+-	AvailFBArea.y2 = lines;
+-	xf86InitFBManager(pScreen, &AvailFBArea); 
+-	
+-	xf86DrvMsg(pScrn->scrnIndex, X_INFO, 
+-		   "Using %i scanlines of offscreen memory \n"
+-		   , lines - pScrn->virtualY);
+-    }
+-
+     xf86SetBackingStore(pScreen);
+     xf86SetSilkenMouse(pScreen);
+ 	
+@@ -612,6 +583,9 @@ DUMMYScreenInit(SCREEN_INIT_ARGS_DECL)
+ 			     | CMAP_RELOAD_ON_MODE_SWITCH))
+ 	return FALSE;
+ 
++    if (!xf86CrtcScreenInit(pScreen))
++        return FALSE;
++
+     pScreen->SaveScreen = DUMMYSaveScreen;
+ 
+     
